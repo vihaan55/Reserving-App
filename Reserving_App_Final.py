@@ -275,21 +275,33 @@ if "model_output" in st.session_state:
 
     st.markdown("---")
 
-    # 1. Reserves Triangle - Improved
+    # 1. Reserves Triangle - Compact + Full Option
     st.subheader("📐 Reserves Triangle (Chain-Ladder)")
     st.caption("Each cell = CL Ultimate − Cumulative Paid at that lag. Last column = Reserve at valuation date.")
+
+    # Compact View (Default - Narrower)
     st.dataframe(
-        res_tri.style.format("${:,.2f}", na_rep="—").set_properties(**{'text-align': 'right'}),
+        res_tri.iloc[:, :13].style.format("${:,.2f}", na_rep="—")   # First 12 lags + CL_Reserve
+                   .set_properties(**{'text-align': 'right'}),
         use_container_width=True,
-        height=650
+        height=520
     )
+
+    # Full Wide Triangle
+    with st.expander("🔎 Show Full Reserves Triangle (All Lags)", expanded=False):
+        st.dataframe(
+            res_tri.style.format("${:,.2f}", na_rep="—")
+                       .set_properties(**{'text-align': 'right'}),
+            use_container_width=True,
+            height=700
+        )
 
     st.markdown("---")
 
     # 2. Paid Triangle
     with st.expander("💰 Cumulative Paid Loss Triangle", expanded=False):
         st.dataframe(
-            paid_tri.style.format("${:,.2f}", na_rep="—"),
+            paid_tri.style.format("${:,.2f}", na_rep="—"), 
             use_container_width=True
         )
 
@@ -301,13 +313,17 @@ if "model_output" in st.session_state:
     c3.metric("50/50 Blend Reserve", f"${results['Blend_50_50_Res'].sum():,.0f}")
     c4.metric("BF Expected Ultimate", f"${eu_display:,.0f}")
 
-    # 4. Results by AY + Totals
+    # 4. Results by Accident Year + Total
     st.subheader("Results by Accident Year")
-    money_format = {col: "${:,.2f}" for col in ["Latest_Paid", "CL_Ultimate", "CL_Reserve", 
-                                               "BF_Ultimate", "BF_Reserve", "Blend_50_50_Ult", "Blend_50_50_Res"]}
-    st.dataframe(results.style.format(money_format | {"CDF": "{:.4f}"}), use_container_width=True)
+    money_cols = ["Latest_Paid", "CL_Ultimate", "CL_Reserve", "BF_Ultimate", 
+                  "BF_Reserve", "Blend_50_50_Ult", "Blend_50_50_Res"]
+    
+    st.dataframe(
+        results.style.format({col: "${:,.2f}" for col in money_cols} | {"CDF": "{:.4f}"}),
+        use_container_width=True
+    )
 
-    totals = results[["Latest_Paid", "CL_Reserve", "BF_Reserve", "Blend_50_50_Res"]].sum().to_frame("Total").T
+    totals = results[money_cols].sum().to_frame("Total").T
     st.dataframe(totals.style.format("${:,.2f}"), use_container_width=True)
 
     # 5. Development Factors
@@ -315,16 +331,24 @@ if "model_output" in st.session_state:
         col_l, col_r = st.columns(2)
         with col_l:
             st.markdown("**Age-to-Age LDFs**")
-            st.dataframe(pd.DataFrame(list(ldfs.items()), columns=["Transition", "LDF"]).style.format({"LDF": "{:.4f}"}), 
-                        use_container_width=True)
+            ldf_df = pd.DataFrame(list(ldfs.items()), columns=["Transition", "LDF"])
+            st.dataframe(ldf_df.style.format({"LDF": "{:.4f}"}), use_container_width=True)
         with col_r:
             st.markdown("**CDFs to Ultimate**")
-            st.dataframe(pd.DataFrame(list(cdfs.items()), columns=["Lag", "CDF"]).sort_values("Lag")
-                        .style.format({"CDF": "{:.4f}"}), use_container_width=True)
+            cdf_df = pd.DataFrame(list(cdfs.items()), columns=["Lag", "CDF"]).sort_values("Lag")
+            st.dataframe(cdf_df.style.format({"CDF": "{:.4f}"}), use_container_width=True)
 
-    # Downloads
-    dl1, dl2 = st.columns(2)
-    with dl1:
-        st.download_button("⬇ Download Results (CSV)", results.to_csv(), f"reserves_{vy}.csv", mime="text/csv")
-    with dl2:
-        st.download_button("⬇ Download Reserves Triangle (CSV)", res_tri.to_csv(), f"reserves_triangle_{vy}.csv", mime="text/csv")
+    # 6. Downloads + Reset
+    col1, col2, col3 = st.columns([2, 2, 1])
+    with col1:
+        st.download_button("⬇ Download Results (CSV)", results.to_csv(), 
+                          f"reserves_{vy}.csv", mime="text/csv")
+    with col2:
+        st.download_button("⬇ Download Reserves Triangle (CSV)", res_tri.to_csv(), 
+                          f"reserves_triangle_{vy}.csv", mime="text/csv")
+    with col3:
+        if st.button("🔄 Reset All Data", type="secondary"):
+            for key in list(st.session_state.keys()):
+                del st.session_state[key]
+            st.success("App has been reset!")
+            st.rerun()
