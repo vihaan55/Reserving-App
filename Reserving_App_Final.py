@@ -275,26 +275,16 @@ if "model_output" in st.session_state:
 
     st.markdown("---")
 
-    # 1. Reserves Triangle - Compact + Full Option
+    # 1. Reserves Triangle (Main Output)
     st.subheader("📐 Reserves Triangle (Chain-Ladder)")
-    st.caption("Each cell = CL Ultimate − Cumulative Paid at that lag. Last column = Reserve at valuation date.")
-
-    # Compact View (Default - Narrower)
+    st.caption("Each cell = CL Ultimate − Cumulative Paid at that lag. CL_Reserve = reserve at the valuation diagonal.")
+    
     st.dataframe(
-        res_tri.iloc[:, :13].style.format("${:,.2f}", na_rep="—")   # First 12 lags + CL_Reserve
+        res_tri.style.format("${:,.2f}", na_rep="—")
                    .set_properties(**{'text-align': 'right'}),
         use_container_width=True,
-        height=520
+        height=580
     )
-
-    # Full Wide Triangle
-    with st.expander("🔎 Show Full Reserves Triangle (All Lags)", expanded=False):
-        st.dataframe(
-            res_tri.style.format("${:,.2f}", na_rep="—")
-                       .set_properties(**{'text-align': 'right'}),
-            use_container_width=True,
-            height=700
-        )
 
     st.markdown("---")
 
@@ -305,6 +295,8 @@ if "model_output" in st.session_state:
             use_container_width=True
         )
 
+    st.markdown("---")
+
     # 3. Summary
     st.subheader("Summary")
     c1, c2, c3, c4 = st.columns(4)
@@ -313,7 +305,7 @@ if "model_output" in st.session_state:
     c3.metric("50/50 Blend Reserve", f"${results['Blend_50_50_Res'].sum():,.0f}")
     c4.metric("BF Expected Ultimate", f"${eu_display:,.0f}")
 
-    # 4. Results by Accident Year + Total
+    # 4. Results by Accident Year + Total Row
     st.subheader("Results by Accident Year")
     money_cols = ["Latest_Paid", "CL_Ultimate", "CL_Reserve", "BF_Ultimate", 
                   "BF_Reserve", "Blend_50_50_Ult", "Blend_50_50_Res"]
@@ -323,6 +315,7 @@ if "model_output" in st.session_state:
         use_container_width=True
     )
 
+    # Total Row
     totals = results[money_cols].sum().to_frame("Total").T
     st.dataframe(totals.style.format("${:,.2f}"), use_container_width=True)
 
@@ -338,7 +331,7 @@ if "model_output" in st.session_state:
             cdf_df = pd.DataFrame(list(cdfs.items()), columns=["Lag", "CDF"]).sort_values("Lag")
             st.dataframe(cdf_df.style.format({"CDF": "{:.4f}"}), use_container_width=True)
 
-    # 6. Downloads + Reset
+    # 6. Downloads + Reset Button
     col1, col2, col3 = st.columns([2, 2, 1])
     with col1:
         st.download_button("⬇ Download Results (CSV)", results.to_csv(), 
@@ -350,5 +343,5 @@ if "model_output" in st.session_state:
         if st.button("🔄 Reset All Data", type="secondary"):
             for key in list(st.session_state.keys()):
                 del st.session_state[key]
-            st.success("App has been reset!")
+            st.success("App reset successfully!")
             st.rerun()
