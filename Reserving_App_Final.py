@@ -262,66 +262,69 @@ if st.button("🚀 RUN RESERVING MODEL", type="primary", use_container_width=Tru
 # This block runs on EVERY script execution once results exist, so the triangle
 # always appears in a predictable position regardless of scroll state or button
 # click timing.
+
 if "model_output" in st.session_state:
-    o          = st.session_state["model_output"]
-    results    = o["results"]
-    res_tri    = o["res_tri"]
-    paid_tri   = o["paid_tri"]
-    ldfs       = o["ldfs"]
-    cdfs       = o["cdfs"]
+    o = st.session_state["model_output"]
+    results = o["results"]
+    res_tri = o["res_tri"]
+    paid_tri = o["paid_tri"]
+    ldfs = o["ldfs"]
+    cdfs = o["cdfs"]
     eu_display = o["eu_display"]
-    vy         = o["vy"]
-
-    _fmt = lambda x: f"{x:,.2f}" if (isinstance(x, float) and not np.isnan(x)) else ""
+    vy = o["vy"]
 
     st.markdown("---")
 
-    # ── 1. Reserves Triangle ──────────────────────────────────────────────────
+    # 1. Reserves Triangle - Improved
     st.subheader("📐 Reserves Triangle (Chain-Ladder)")
-    st.caption("Each cell = CL Ultimate − Cumulative Paid at that lag. "
-               "CL_Reserve = reserve at the valuation diagonal.")
-    st.dataframe(res_tri.style.format(_fmt), use_container_width=True)
+    st.caption("Each cell = CL Ultimate − Cumulative Paid at that lag. Last column = Reserve at valuation date.")
+    st.dataframe(
+        res_tri.style.format("${:,.2f}", na_rep="—").set_properties(**{'text-align': 'right'}),
+        use_container_width=True,
+        height=650
+    )
 
     st.markdown("---")
 
-    # ── 2. Paid triangle ──────────────────────────────────────────────────────
+    # 2. Paid Triangle
     with st.expander("💰 Cumulative Paid Loss Triangle", expanded=False):
-        st.dataframe(paid_tri.style.format(_fmt), use_container_width=True)
+        st.dataframe(
+            paid_tri.style.format("${:,.2f}", na_rep="—"),
+            use_container_width=True
+        )
 
-    st.markdown("---")
-
-    # ── 3. Summary ────────────────────────────────────────────────────────────
+    # 3. Summary
     st.subheader("Summary")
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("Chain-Ladder Reserve", f"${results['CL_Reserve'].sum():,.0f}")
-    c2.metric("BF Reserve",           f"${results['BF_Reserve'].sum():,.0f}")
-    c3.metric("50/50 Blend Reserve",  f"${results['Blend_50_50_Res'].sum():,.0f}")
+    c2.metric("BF Reserve", f"${results['BF_Reserve'].sum():,.0f}")
+    c3.metric("50/50 Blend Reserve", f"${results['Blend_50_50_Res'].sum():,.0f}")
     c4.metric("BF Expected Ultimate", f"${eu_display:,.0f}")
 
-    # ── 4. Results by AY ──────────────────────────────────────────────────────
+    # 4. Results by AY + Totals
     st.subheader("Results by Accident Year")
-    st.dataframe(results, use_container_width=True)
-    totals = (results[[c for c in results.columns if c not in ("Diagonal_Lag", "CDF")]]
-              .sum().to_frame("Total").T)
-    st.dataframe(totals, use_container_width=True)
+    money_format = {col: "${:,.2f}" for col in ["Latest_Paid", "CL_Ultimate", "CL_Reserve", 
+                                               "BF_Ultimate", "BF_Reserve", "Blend_50_50_Ult", "Blend_50_50_Res"]}
+    st.dataframe(results.style.format(money_format | {"CDF": "{:.4f}"}), use_container_width=True)
 
-    # ── 5. Development Factors ────────────────────────────────────────────────
+    totals = results[["Latest_Paid", "CL_Reserve", "BF_Reserve", "Blend_50_50_Res"]].sum().to_frame("Total").T
+    st.dataframe(totals.style.format("${:,.2f}"), use_container_width=True)
+
+    # 5. Development Factors
     with st.expander("Development Factors", expanded=False):
         col_l, col_r = st.columns(2)
         with col_l:
             st.markdown("**Age-to-Age LDFs**")
-            st.dataframe(pd.DataFrame(list(ldfs.items()), columns=["Transition", "LDF"]),
-                         use_container_width=True)
+            st.dataframe(pd.DataFrame(list(ldfs.items()), columns=["Transition", "LDF"]).style.format({"LDF": "{:.4f}"}), 
+                        use_container_width=True)
         with col_r:
             st.markdown("**CDFs to Ultimate**")
-            st.dataframe(pd.DataFrame(list(cdfs.items()), columns=["Lag", "CDF"])
-                         .sort_values("Lag"), use_container_width=True)
+            st.dataframe(pd.DataFrame(list(cdfs.items()), columns=["Lag", "CDF"]).sort_values("Lag")
+                        .style.format({"CDF": "{:.4f}"}), use_container_width=True)
 
-    # ── 6. Downloads ──────────────────────────────────────────────────────────
+    # Downloads
     dl1, dl2 = st.columns(2)
     with dl1:
-        st.download_button("⬇ Download Results (CSV)", results.to_csv(),
-                           file_name=f"reserves_{vy}.csv", mime="text/csv")
+        st.download_button("⬇ Download Results (CSV)", results.to_csv(), f"reserves_{vy}.csv", mime="text/csv")
     with dl2:
-        st.download_button("⬇ Download Reserves Triangle (CSV)", res_tri.to_csv(),
-                           file_name=f"reserves_triangle_{vy}.csv", mime="text/csv")
+        st.download_button("⬇ Download Reserves Triangle (CSV)", res_tri.to_csv(), f"reserves_triangle_{vy}.csv", mime="text/csv")
