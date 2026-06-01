@@ -51,7 +51,6 @@ with tab_upload:
                 raw_df = raw_df.loc[~(raw_df[num_cols] == 0).all(axis=1)]
 
             st.subheader("Raw Data (first 10 rows)")
-            # FIX: use Claim_ID as display index when present — cleaner than 0,1,2…
             preview = raw_df.head(10)
             if "Claim_ID" in preview.columns:
                 preview = preview.set_index("Claim_ID")
@@ -85,8 +84,6 @@ with tab_upload:
 
                 st.session_state["work_df"] = work_df
 
-                # FIX: convert premium_series index to plain int immediately so
-                # manual-mode per-AY lookups never hit an Int64/int mismatch
                 prem_series = None
                 if "Premium" in work_df.columns:
                     prem_series = (work_df.groupby("Accident_Year")["Premium"]
@@ -128,17 +125,14 @@ if st.button("🚀 RUN RESERVING MODEL", type="primary", use_container_width=Tru
     vy             = int(valuation_year)
     tail           = float(tail_factor)
 
-    # 1. Filter to valuation year
     df = df[df["Settlement_Year"] <= vy].copy()
     if df.empty:
         st.error("No claims remain after filtering. Increase the Valuation Year.")
         st.stop()
 
-    # 2. Convert nullable Int64 → plain int before any dict/index operations
     for col in ["Accident_Year", "Development_Lag", "Settlement_Year"]:
         df[col] = df[col].astype(int)
 
-    # 3. Incremental → cumulative triangle
     latest_paid    = df.groupby("Accident_Year")["Amount"].sum()
     accident_years = sorted(int(ay) for ay in latest_paid.index)
     diag_lag       = {ay: vy - ay for ay in accident_years}
@@ -151,7 +145,6 @@ if st.button("🚀 RUN RESERVING MODEL", type="primary", use_container_width=Tru
     tri_cum = tri_inc.cumsum(axis=1)
     lags    = sorted(int(c) for c in tri_cum.columns)
 
-    # 4. Volume-weighted LDFs (upper triangle only)
     ldfs = {}
     for i in range(len(lags) - 1):
         c_lag, n_lag = lags[i], lags[i + 1]
@@ -166,8 +159,6 @@ if st.button("🚀 RUN RESERVING MODEL", type="primary", use_container_width=Tru
                      if mask.any() else 1.0)
 
     ldf_vals = list(ldfs.values())
-
-    # 5. CDFs to ultimate
     cdfs = {}
     for si, lag in enumerate(lags):
         cdf = tail
@@ -178,7 +169,6 @@ if st.button("🚀 RUN RESERVING MODEL", type="primary", use_container_width=Tru
     def _cdf(d: int) -> float:
         return cdfs.get(d, tail)
 
-    # 6. Chain-Ladder ultimates & reserves
     cl_ult, cl_res = {}, {}
     for ay in accident_years:
         lp         = float(latest_paid[ay])
@@ -186,7 +176,6 @@ if st.button("🚀 RUN RESERVING MODEL", type="primary", use_container_width=Tru
         cl_ult[ay] = u
         cl_res[ay] = u - lp
 
-    # 7. BF ultimates & reserves
     if premium_source == "Enter manually" and manual_premium and elr:
         def _eu(ay):
             if premium_series is not None and ay in premium_series.index:
@@ -207,7 +196,6 @@ if st.button("🚀 RUN RESERVING MODEL", type="primary", use_container_width=Tru
         bf_ult[ay] = u
         bf_res[ay] = u - lp
 
-    # 8. Results by AY — Pct_Developed added so BF formula is self-evident
     rows = []
     for ay in accident_years:
         rows.append({
@@ -225,7 +213,6 @@ if st.button("🚀 RUN RESERVING MODEL", type="primary", use_container_width=Tru
         })
     results = pd.DataFrame(rows).set_index("Accident_Year")
 
-    # 9. Paid triangle
     paid_data = {}
     for ay in accident_years:
         d   = diag_lag[ay]
@@ -242,7 +229,6 @@ if st.button("🚀 RUN RESERVING MODEL", type="primary", use_container_width=Tru
     paid_tri = pd.DataFrame.from_dict(paid_data, orient="index", dtype=float)
     paid_tri.index.name = "Accident_Year"
 
-    # 10. Reserves triangle
     res_data = {}
     for ay in accident_years:
         d    = diag_lag[ay]
@@ -261,25 +247,25 @@ if st.button("🚀 RUN RESERVING MODEL", type="primary", use_container_width=Tru
     res_tri = pd.DataFrame.from_dict(res_data, orient="index", dtype=float)
     res_tri.index.name = "Accident_Year"
 
-    # Identify fully-developed and most-immature AYs for annotations
     max_lag       = max(lags)
     fully_dev     = [ay for ay in accident_years if diag_lag[ay] >= max_lag]
     most_immature = accident_years[-1]
 
     st.session_state["model_output"] = dict(
-        results       = results,
-        res_tri       = res_tri,
-        paid_tri      = paid_tri,
-        ldfs          = ldfs,
-        cdfs          = cdfs,
-        eu_display    = eu_display,
-        vy            = vy,
-        fully_dev     = fully_dev,
-        most_immature = most_immature,
+        results        = results,
+        res_tri        = res_tri,
+        paid_tri       = paid_tri,
+        ldfs           = ldfs,
+        cdfs           = cdfs,
+        eu_display     = eu_display,
+        vy             = vy,
+        fully_dev      = fully_dev,
+        most_immature  = most_immature,
         accident_years = accident_years,
-        cl_res        = cl_res,
-        bf_res        = bf_res,
-        n_ays         = len(accident_years),
+        cl_res         = cl_res,
+        bf_res         = bf_res,
+        n_ays          = len(accident_years),
+        max_lag        = max_lag,
     )
 
 # ── OUTPUT ────────────────────────────────────────────────────────────────────
@@ -298,6 +284,7 @@ if "model_output" in st.session_state:
     cl_res         = o["cl_res"]
     bf_res         = o["bf_res"]
     n_ays          = o["n_ays"]
+    max_lag        = o["max_lag"]
 
     st.markdown("---")
 
@@ -308,8 +295,6 @@ if "model_output" in st.session_state:
         "CL_Reserve = reserve at the valuation diagonal. "
         "— = future development (upper triangle)."
     )
-    # FIX: no $ in triangle cells — dense table, commas only; na_rep="—" for blanks
-    # FIX: height is dynamic so it works for any dataset size
     tri_height = max(400, 30 + n_ays * 25)
     st.dataframe(
         res_tri.style.format("{:,.2f}", na_rep="—"),
@@ -317,12 +302,12 @@ if "model_output" in st.session_state:
         height=tri_height,
     )
 
-    # Actuarial note: $0 reserves for fully-developed AYs
+    # FIX: removed redundant ℹ️ emoji from text — st.info already shows its own icon
     if fully_dev:
         fd_str = " and ".join(str(ay) for ay in fully_dev)
         st.info(
-            f"ℹ️ **AY {fd_str}** carry a $0 CL Reserve — these years have reached "
-            f"the maximum observed development lag ({max(cdfs.keys())} years) and are "
+            f"**AY {fd_str}** carry a $0 CL Reserve — these years have reached "
+            f"the maximum observed development lag ({max_lag} years) and are "
             f"treated as fully developed under the current tail factor (1.0 = no tail loading)."
         )
 
@@ -347,13 +332,18 @@ if "model_output" in st.session_state:
 
     st.markdown("---")
 
-    # ── 4. Reserve chart: CL vs BF vs Blend by AY ────────────────────────────
+    # ── 4. Reserve chart ─────────────────────────────────────────────────────
     st.subheader("📊 Reserves by Accident Year")
 
     ays_str    = [str(ay) for ay in accident_years]
     cl_vals    = [cl_res[ay] for ay in accident_years]
     bf_vals    = [bf_res[ay] for ay in accident_years]
     blend_vals = [(cl_res[ay] + bf_res[ay]) / 2 for ay in accident_years]
+
+    # FIX: annotation y-position tied to actual data max so it scales with any dataset
+    data_max   = max(max(cl_vals), max(bf_vals))
+    annot_y_fd = data_max * 0.02       # "Fully dev." label sits just above zero
+    annot_y_im = max(cl_res[most_immature], bf_res[most_immature]) + data_max * 0.04
 
     fig = go.Figure()
     fig.add_trace(go.Bar(
@@ -372,16 +362,14 @@ if "model_output" in st.session_state:
         hovertemplate="AY %{x}<br>Blend Reserve: $%{y:,.0f}<extra></extra>",
     ))
 
-    # Annotate fully-developed AYs and the most immature AY
     annotations = []
     for ay in fully_dev:
         annotations.append(dict(
-            x=str(ay), y=8000, text="Fully dev.",
+            x=str(ay), y=annot_y_fd, text="Fully dev.",
             showarrow=False, font=dict(size=9, color="#6B7280"), xanchor="center",
         ))
     annotations.append(dict(
-        x=str(most_immature),
-        y=max(cl_res[most_immature], bf_res[most_immature]) + 25000,
+        x=str(most_immature), y=annot_y_im,
         text="Most immature<br>(lag 0)",
         showarrow=True, arrowhead=2, arrowcolor="#EF4444",
         font=dict(size=9, color="#EF4444"), xanchor="center",
@@ -404,13 +392,12 @@ if "model_output" in st.session_state:
     fig.update_yaxes(showgrid=True, gridcolor="rgba(128,128,128,0.15)")
     st.plotly_chart(fig, use_container_width=True)
 
-    # Actuarial note: CL vs BF divergence for most immature AY
-    cl_imm   = cl_res[most_immature]
-    bf_imm   = bf_res[most_immature]
-    pct_gap  = abs(bf_imm - cl_imm) / cl_imm * 100 if cl_imm > 0 else 0
-    pct_devd = 1.0 / results.loc[most_immature, "CDF"]
+    cl_imm  = cl_res[most_immature]
+    bf_imm  = bf_res[most_immature]
+    pct_gap = abs(bf_imm - cl_imm) / cl_imm * 100 if cl_imm > 0 else 0
+    pct_dvd = 1.0 / results.loc[most_immature, "CDF"]
     st.caption(
-        f"⚠️ **AY {most_immature}** is only {pct_devd:.1%} developed (lag 0): "
+        f"⚠️ **AY {most_immature}** is only {pct_dvd:.1%} developed (lag 0): "
         f"CL Reserve = ${cl_imm:,.0f} vs BF Reserve = ${bf_imm:,.0f} — a {pct_gap:.0f}% gap. "
         f"CL is highly sensitive to early paid losses; BF's anchor to the "
         f"Expected Ultimate (${eu_display:,.0f}) makes it more stable here."
@@ -426,15 +413,17 @@ if "model_output" in st.session_state:
     fmt_map = {**{col: "${:,.2f}" for col in money_cols},
                "CDF": "{:.6f}",
                "Pct_Developed": "{:.2%}"}
-
     st.dataframe(results.style.format(fmt_map), use_container_width=True)
 
-    # Totals row — only summable columns
+    # FIX: totals format uses same money_cols dict — won't break if column types shift
     non_sum = ("Diagonal_Lag", "CDF", "Pct_Developed")
     totals  = (results[[c for c in results.columns if c not in non_sum]]
                .sum().to_frame("Total").T)
     st.markdown("**Totals**")
-    st.dataframe(totals.style.format("${:,.2f}"), use_container_width=True)
+    st.dataframe(
+        totals.style.format({col: "${:,.2f}" for col in totals.columns}),
+        use_container_width=True,
+    )
 
     st.markdown("---")
 
@@ -462,7 +451,6 @@ if "model_output" in st.session_state:
         st.download_button("⬇ Download Reserves Triangle (CSV)", res_tri.to_csv(),
                            file_name=f"reserves_triangle_{vy}.csv", mime="text/csv")
     with col3:
-        # FIX: st.session_state.clear() is cleaner than the loop-delete pattern
         if st.button("🔄 Reset", type="secondary"):
             st.session_state.clear()
             st.rerun()
