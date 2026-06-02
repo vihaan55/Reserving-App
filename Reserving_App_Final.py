@@ -39,7 +39,7 @@ with tab_upload:
     is_preagg = fmt_choice.startswith("Pre")
 
     if is_preagg:
-        st.markdown("Required: **AccidentYear**, **DevelopmentLag**, **CumPaidLoss** (or similar cumulative paid)")
+        st.markdown("Required: **AccidentYear**, **DevelopmentLag**, **CumPaidLoss** (or similar)")
     else:
         st.markdown("Required: **Accident_Year**, **Development_Lag**, **Amount**, **Settlement_Year**")
 
@@ -50,7 +50,7 @@ with tab_upload:
             raw_df = pd.read_csv(uploaded) if uploaded.name.lower().endswith(".csv") else pd.read_excel(uploaded)
             raw_df = raw_df.dropna(how="all")
 
-            # Company filter for pre-aggregated
+            # Company filter for pre-aggregated data
             if is_preagg:
                 grp_col = None
                 for c in raw_df.columns:
@@ -67,7 +67,7 @@ with tab_upload:
             st.subheader("Raw Data (first 10 rows)")
             st.dataframe(raw_df.head(10), use_container_width=True)
 
-            # Column Mapping
+            # ── Column Mapping ───────────────────────────────────────────────
             col_map = {}
             if is_preagg:
                 for c in raw_df.columns:
@@ -75,8 +75,10 @@ with tab_upload:
                     if "accident" in cl or cl in ("year", "ay"):
                         col_map.setdefault("Accident_Year", c)
                     if "developmentlag" in cl or "dev_lag" in cl or "lag" in cl:
-                        col_map.setdefault("Development_Lag", c)
-                    if ("cum" in cl and "paid" in cl) or "paid" in cl or "loss" in cl:
+                        col_map["Development_Lag"] = c          # Direct assign
+                    if ("cum" in cl and "paid" in cl) or "cumpaid" in cl:
+                        col_map["Amount"] = c                   # Prioritize CumPaid
+                    elif "paid" in cl or "loss" in cl:
                         col_map.setdefault("Amount", c)
                     if "prem" in cl or "earned" in cl:
                         col_map.setdefault("Premium", c)
@@ -87,7 +89,7 @@ with tab_upload:
                         col_map.setdefault("Accident_Year", c)
                     if "development" in cl or "lag" in cl:
                         col_map.setdefault("Development_Lag", c)
-                    if "amount" in cl or "loss" in cl or "paid" in cl:
+                    if "amount" in cl or "loss" in cl or ("paid" in cl and "latest" not in cl):
                         col_map.setdefault("Amount", c)
                     if "settlement" in cl:
                         col_map.setdefault("Settlement_Year", c)
@@ -120,7 +122,33 @@ with tab_upload:
         except Exception as e:
             st.error(f"Error: {e}")
 
-# ── Run ───────────────────────────────────────────────────────────────────────
+# ── Column Reference ────────────────────────────────────────────────────────
+with tab_ref:
+    col_l, col_r = st.columns(2)
+    with col_l:
+        st.markdown("**Individual Claim Records**")
+        st.markdown("""
+        | Column            | Description |
+        |-------------------|-------------|
+        | `Accident_Year`   | Year the loss occurred |
+        | `Development_Lag` | Development lag |
+        | `Amount`          | Incremental claim payment |
+        | `Settlement_Year` | Year the claim was paid |
+        | `Premium`         | Optional earned premium |
+        """)
+    with col_r:
+        st.markdown("**Pre-aggregated Triangle**")
+        st.markdown("""
+        | Column             | Description |
+        |--------------------|-------------|
+        | `AccidentYear`     | Accident year |
+        | `DevelopmentLag`   | Development lag (0 or 1-indexed) |
+        | `CumPaidLoss`      | **Cumulative** paid losses |
+        | `EarnedPremNet`    | Optional earned premium |
+        | `GRNAME`           | Company name (optional) |
+        """)
+
+# ── Run Model ───────────────────────────────────────────────────────────────
 if st.button("🚀 RUN RESERVING MODEL", type="primary", use_container_width=True):
     if "work_df" not in st.session_state:
         st.error("No data loaded.")
@@ -225,7 +253,7 @@ if st.button("🚀 RUN RESERVING MODEL", type="primary", use_container_width=Tru
         bf_ult[ay] = u
         bf_res[ay] = u - lp
 
-    # Results DataFrame
+    # Build Results
     rows = []
     for ay in accident_years:
         rows.append({
@@ -243,7 +271,7 @@ if st.button("🚀 RUN RESERVING MODEL", type="primary", use_container_width=Tru
         })
     results = pd.DataFrame(rows).set_index("Accident_Year")
 
-    # Triangles
+    # Build Triangles
     paid_data = {}
     for ay in accident_years:
         d = diag_lag[ay]
@@ -307,7 +335,6 @@ if "model_output" in st.session_state:
     bf_res = o["bf_res"]
 
     st.markdown("---")
-
     st.subheader("📐 Reserves Triangle (Chain-Ladder)")
     st.caption("Each cell = CL Ultimate − Cumulative Paid at that lag. — = future development.")
     tri_height = max(400, 30 + n_ays * 25)
@@ -333,7 +360,6 @@ if "model_output" in st.session_state:
 
     st.markdown("---")
 
-    # Plotly Chart
     st.subheader("📊 Reserves by Accident Year")
     ays_str = [str(ay) for ay in accident_years]
     cl_vals = [cl_res[ay] for ay in accident_years]
@@ -344,7 +370,6 @@ if "model_output" in st.session_state:
     fig.add_trace(go.Bar(name="Chain-Ladder", x=ays_str, y=cl_vals, marker_color="#3B82F6"))
     fig.add_trace(go.Bar(name="Bornhuetter-Ferguson", x=ays_str, y=bf_vals, marker_color="#F59E0B"))
     fig.add_trace(go.Bar(name="50/50 Blend", x=ays_str, y=blend_vals, marker_color="#10B981"))
-
     fig.update_layout(barmode="group", xaxis_title="Accident Year", yaxis_title="Reserve ($)",
                       height=430, hovermode="x unified")
     st.plotly_chart(fig, use_container_width=True)
