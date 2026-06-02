@@ -9,11 +9,8 @@ st.markdown("**Chain-Ladder + Bornhuetter-Ferguson | 50/50 Blend**")
 
 # ── Sidebar ────────────────────────────────────────────────────────────────────
 st.sidebar.header("Model Parameters")
-
 valuation_year = st.sidebar.number_input("Valuation Year", value=2023, step=1)
-tail_factor    = st.sidebar.number_input("Tail Factor", min_value=1.0, max_value=10.0,
-                                         value=1.0, step=0.01)
-
+tail_factor = st.sidebar.number_input("Tail Factor", min_value=1.0, max_value=10.0, value=1.0, step=0.01)
 st.sidebar.markdown("---")
 st.sidebar.subheader("Premium / BF Settings")
 premium_source = st.sidebar.radio(
@@ -23,140 +20,173 @@ premium_source = st.sidebar.radio(
 manual_premium = None
 elr = None
 if premium_source == "Enter manually":
-    manual_premium = st.sidebar.number_input("Annual Premium ($)", min_value=0.0,
-                                              value=1_000_000.0, step=10_000.0)
-    elr = st.sidebar.number_input("Expected Loss Ratio", min_value=0.0,
-                                   max_value=5.0, value=0.65, step=0.01)
+    manual_premium = st.sidebar.number_input("Annual Premium ($)", min_value=0.0, value=1_000_000.0, step=10_000.0)
+    elr = st.sidebar.number_input("Expected Loss Ratio", min_value=0.0, max_value=5.0, value=0.65, step=0.01)
     st.sidebar.caption(f"BF Expected Ultimate = ${elr * manual_premium:,.0f}")
 else:
     st.sidebar.caption("BF Expected Ultimate = mean of CL ultimates.")
 
-# ── Data upload ────────────────────────────────────────────────────────────────
+# ── Data Input ────────────────────────────────────────────────────────────────
 st.header("Data Input")
 tab_upload, tab_ref = st.tabs(["📁 Upload File", "📋 Column Reference"])
 
 with tab_upload:
-    st.markdown("Required: **Accident_Year**, **Development_Lag**, **Amount**, "
-                "**Settlement_Year**. Optional: **Premium**.")
-    uploaded = st.file_uploader("Upload claim data file", type=["xlsx", "xls", "csv"])
+    fmt_choice = st.radio(
+        "Input format",
+        ["Individual claim records", "Pre-aggregated triangle (CAS / Schedule P)"],
+        horizontal=True
+    )
+    is_preagg = fmt_choice.startswith("Pre")
+
+    if is_preagg:
+        st.markdown("Required: **AccidentYear**, **DevelopmentLag**, **CumPaidLoss** (or similar cumulative paid)")
+    else:
+        st.markdown("Required: **Accident_Year**, **Development_Lag**, **Amount**, **Settlement_Year**")
+
+    uploaded = st.file_uploader("Upload data file", type=["xlsx", "xls", "csv"])
 
     if uploaded is not None:
         try:
-            raw_df = (pd.read_csv(uploaded)
-                      if uploaded.name.lower().endswith(".csv")
-                      else pd.read_excel(uploaded))
+            raw_df = pd.read_csv(uploaded) if uploaded.name.lower().endswith(".csv") else pd.read_excel(uploaded)
             raw_df = raw_df.dropna(how="all")
-            num_cols = raw_df.select_dtypes(include="number").columns
-            if len(num_cols):
-                raw_df = raw_df.loc[~(raw_df[num_cols] == 0).all(axis=1)]
+
+            # Company filter for pre-aggregated
+            if is_preagg:
+                grp_col = None
+                for c in raw_df.columns:
+                    cl = c.lower().replace(" ", "_")
+                    if any(k in cl for k in ["grname", "grp", "company", "group", "insurer", "carrier"]):
+                        grp_col = c
+                        break
+                if grp_col and raw_df[grp_col].nunique() > 1:
+                    companies = sorted(raw_df[grp_col].dropna().unique().tolist())
+                    sel_co = st.selectbox("Select Company:", companies)
+                    raw_df = raw_df[raw_df[grp_col] == sel_co].copy()
+                    st.success(f"Filtered to: **{sel_co}**")
 
             st.subheader("Raw Data (first 10 rows)")
-            preview = raw_df.head(10)
-            if "Claim_ID" in preview.columns:
-                preview = preview.set_index("Claim_ID")
-            st.dataframe(preview, use_container_width=True)
+            st.dataframe(raw_df.head(10), use_container_width=True)
 
+            # Column Mapping
             col_map = {}
-            for c in raw_df.columns:
-                cl = c.lower().replace(" ", "_")
-                if "accident" in cl or cl in ("year", "ay"):
-                    col_map.setdefault("Accident_Year", c)
-                if "development" in cl or "lag" in cl:
-                    col_map.setdefault("Development_Lag", c)
-                if "amount" in cl or "loss" in cl or ("paid" in cl and "latest" not in cl):
-                    col_map.setdefault("Amount", c)
-                if "settlement" in cl:
-                    col_map.setdefault("Settlement_Year", c)
-                if "premium" in cl or "prem" in cl:
-                    col_map.setdefault("Premium", c)
+            if is_preagg:
+                for c in raw_df.columns:
+                    cl = c.lower().replace(" ", "_")
+                    if "accident" in cl or cl in ("year", "ay"):
+                        col_map.setdefault("Accident_Year", c)
+                    if "developmentlag" in cl or "dev_lag" in cl or "lag" in cl:
+                        col_map.setdefault("Development_Lag", c)
+                    if ("cum" in cl and "paid" in cl) or "paid" in cl or "loss" in cl:
+                        col_map.setdefault("Amount", c)
+                    if "prem" in cl or "earned" in cl:
+                        col_map.setdefault("Premium", c)
+            else:
+                for c in raw_df.columns:
+                    cl = c.lower().replace(" ", "_")
+                    if "accident" in cl or cl in ("year", "ay"):
+                        col_map.setdefault("Accident_Year", c)
+                    if "development" in cl or "lag" in cl:
+                        col_map.setdefault("Development_Lag", c)
+                    if "amount" in cl or "loss" in cl or "paid" in cl:
+                        col_map.setdefault("Amount", c)
+                    if "settlement" in cl:
+                        col_map.setdefault("Settlement_Year", c)
+                    if "premium" in cl or "prem" in cl:
+                        col_map.setdefault("Premium", c)
 
-            required = ["Accident_Year", "Development_Lag", "Amount", "Settlement_Year"]
-            missing  = [r for r in required if r not in col_map]
+            required = ["Accident_Year", "Development_Lag", "Amount"] if is_preagg else ["Accident_Year", "Development_Lag", "Amount", "Settlement_Year"]
+            missing = [r for r in required if r not in col_map]
 
             if missing:
-                st.error(f"Could not auto-detect columns: {missing}. Please rename them.")
+                st.error(f"Could not auto-detect columns: {missing}")
             else:
                 work_df = raw_df.rename(columns={v: k for k, v in col_map.items()})
-                for col in ["Accident_Year", "Development_Lag", "Settlement_Year"]:
+                for col in ["Accident_Year", "Development_Lag"]:
                     work_df[col] = pd.to_numeric(work_df[col], errors="coerce").astype("Int64")
+                if not is_preagg:
+                    work_df["Settlement_Year"] = pd.to_numeric(work_df["Settlement_Year"], errors="coerce").astype("Int64")
                 work_df["Amount"] = pd.to_numeric(work_df["Amount"], errors="coerce").fillna(0)
                 work_df = work_df.dropna(subset=required)
 
                 st.session_state["work_df"] = work_df
+                st.session_state["data_format"] = "pre_aggregated" if is_preagg else "individual"
 
                 prem_series = None
                 if "Premium" in work_df.columns:
-                    prem_series = (work_df.groupby("Accident_Year")["Premium"]
-                                   .first().astype(float))
-                    prem_series.index = prem_series.index.astype(int)
+                    prem_series = work_df.groupby("Accident_Year")["Premium"].first().astype(float)
                 st.session_state["premium_series"] = prem_series
 
-                n_ays  = work_df["Accident_Year"].nunique()
-                sy_min = int(work_df["Settlement_Year"].min())
-                sy_max = int(work_df["Settlement_Year"].max())
-                st.success(f"✓ {len(work_df):,} records | {n_ays} accident years | "
-                           f"Settlement years: {sy_min}–{sy_max}")
-                st.info(f"Valuation Year = {int(valuation_year)}. "
-                        f"Claims with Settlement_Year > {int(valuation_year)} will be excluded.")
+                st.success(f"✅ Data loaded! ({len(work_df):,} rows)")
         except Exception as e:
-            st.error(f"Error reading file: {e}")
+            st.error(f"Error: {e}")
 
-with tab_ref:
-    st.markdown("""
-| Column | Description |
-|---|---|
-| `Accident_Year` | Year the loss occurred |
-| `Development_Lag` | Settlement_Year − Accident_Year |
-| `Amount` | Claim payment |
-| `Settlement_Year` | Year the claim was paid |
-| `Premium` *(optional)* | Earned premium for that AY |
-""")
-
-# ── Run ────────────────────────────────────────────────────────────────────────
-st.markdown("---")
-
+# ── Run ───────────────────────────────────────────────────────────────────────
 if st.button("🚀 RUN RESERVING MODEL", type="primary", use_container_width=True):
     if "work_df" not in st.session_state:
         st.error("No data loaded.")
         st.stop()
 
-    df             = st.session_state["work_df"].copy()
+    df = st.session_state["work_df"].copy()
     premium_series = st.session_state.get("premium_series")
-    vy             = int(valuation_year)
-    tail           = float(tail_factor)
+    data_format = st.session_state.get("data_format", "individual")
+    vy = int(valuation_year)
+    tail = float(tail_factor)
 
-    df = df[df["Settlement_Year"] <= vy].copy()
-    if df.empty:
-        st.error("No claims remain after filtering. Increase the Valuation Year.")
-        st.stop()
+    if data_format == "individual":
+        df = df[df["Settlement_Year"] <= vy].copy()
+        if df.empty:
+            st.error("No claims remain after filtering.")
+            st.stop()
+        for col in ["Accident_Year", "Development_Lag", "Settlement_Year"]:
+            df[col] = df[col].astype(int)
+        latest_paid = df.groupby("Accident_Year")["Amount"].sum()
+        accident_years = sorted(int(ay) for ay in latest_paid.index)
+        diag_lag = {ay: vy - ay for ay in accident_years}
+        grouped = df.groupby(["Accident_Year", "Development_Lag"])["Amount"].sum().reset_index()
+        tri_inc = grouped.pivot(index="Accident_Year", columns="Development_Lag", values="Amount").fillna(0)
+        tri_inc.columns = [int(c) for c in tri_inc.columns]
+        tri_inc = tri_inc.sort_index().sort_index(axis=1)
+        tri_cum = tri_inc.cumsum(axis=1)
+        lags = sorted(int(c) for c in tri_cum.columns)
+    else:  # Pre-aggregated
+        for col in ["Accident_Year", "Development_Lag"]:
+            df[col] = df[col].astype(int)
+        df["Amount"] = pd.to_numeric(df["Amount"], errors="coerce").fillna(0)
+        if df["Development_Lag"].min() == 1:
+            df["Development_Lag"] = df["Development_Lag"] - 1
+        df = df[df["Accident_Year"] + df["Development_Lag"] <= vy].copy()
+        if df.empty:
+            st.error("No data remains after filtering.")
+            st.stop()
+        accident_years = sorted(int(ay) for ay in df["Accident_Year"].unique())
+        diag_lag = {ay: vy - ay for ay in accident_years}
+        tri_cum = df.groupby(["Accident_Year", "Development_Lag"])["Amount"].sum().unstack().sort_index().sort_index(axis=1)
+        tri_cum.columns = [int(c) for c in tri_cum.columns]
+        lags = sorted(int(c) for c in tri_cum.columns)
 
-    for col in ["Accident_Year", "Development_Lag", "Settlement_Year"]:
-        df[col] = df[col].astype(int)
+        latest_paid_dict = {}
+        for ay in accident_years:
+            d = diag_lag[ay]
+            if ay in tri_cum.index:
+                row = tri_cum.loc[ay]
+                valid_lags = row.index[row.index <= d]
+                latest_paid_dict[ay] = float(row[valid_lags.max()]) if len(valid_lags) > 0 else 0.0
+            else:
+                latest_paid_dict[ay] = 0.0
+        latest_paid = pd.Series(latest_paid_dict)
 
-    latest_paid    = df.groupby("Accident_Year")["Amount"].sum()
-    accident_years = sorted(int(ay) for ay in latest_paid.index)
-    diag_lag       = {ay: vy - ay for ay in accident_years}
-
-    grouped = df.groupby(["Accident_Year", "Development_Lag"])["Amount"].sum().reset_index()
-    tri_inc = grouped.pivot(index="Accident_Year", columns="Development_Lag",
-                            values="Amount").fillna(0)
-    tri_inc.columns = [int(c) for c in tri_inc.columns]
-    tri_inc = tri_inc.sort_index().sort_index(axis=1)
-    tri_cum = tri_inc.cumsum(axis=1)
-    lags    = sorted(int(c) for c in tri_cum.columns)
-
+    # Common Logic
     ldfs = {}
-    for i in range(len(lags) - 1):
-        c_lag, n_lag = lags[i], lags[i + 1]
+    for i in range(len(lags)-1):
+        c_lag, n_lag = lags[i], lags[i+1]
         eligible = [ay for ay in accident_years if diag_lag[ay] >= n_lag]
-        key      = f"{c_lag}-{n_lag}"
+        key = f"{c_lag}-{n_lag}"
         if not eligible:
             ldfs[key] = 1.0
             continue
-        sub  = tri_cum.loc[eligible, [c_lag, n_lag]]
+        sub = tri_cum.loc[eligible, [c_lag, n_lag]]
         mask = sub[c_lag].notna() & sub[n_lag].notna() & (sub[c_lag] > 0)
-        ldfs[key] = (sub.loc[mask, n_lag].sum() / sub.loc[mask, c_lag].sum()
-                     if mask.any() else 1.0)
+        ldfs[key] = sub.loc[mask, n_lag].sum() / sub.loc[mask, c_lag].sum() if mask.any() else 1.0
 
     ldf_vals = list(ldfs.values())
     cdfs = {}
@@ -166,13 +196,13 @@ if st.button("🚀 RUN RESERVING MODEL", type="primary", use_container_width=Tru
             cdf *= ldf_vals[j]
         cdfs[lag] = cdf
 
-    def _cdf(d: int) -> float:
+    def _cdf(d):
         return cdfs.get(d, tail)
 
     cl_ult, cl_res = {}, {}
     for ay in accident_years:
-        lp         = float(latest_paid[ay])
-        u          = lp * _cdf(diag_lag[ay])
+        lp = float(latest_paid[ay])
+        u = lp * _cdf(diag_lag[ay])
         cl_ult[ay] = u
         cl_res[ay] = u - lp
 
@@ -184,38 +214,39 @@ if st.button("🚀 RUN RESERVING MODEL", type="primary", use_container_width=Tru
         eu_display = elr * float(manual_premium)
     else:
         _mean = float(np.mean(list(cl_ult.values())))
-        def _eu(_):
-            return _mean
+        def _eu(_): return _mean
         eu_display = _mean
 
     bf_ult, bf_res = {}, {}
     for ay in accident_years:
-        lp         = float(latest_paid[ay])
-        pct_dev    = 1.0 / _cdf(diag_lag[ay])
-        u          = lp + _eu(ay) * (1.0 - pct_dev)
+        lp = float(latest_paid[ay])
+        pct_dev = 1.0 / _cdf(diag_lag[ay])
+        u = lp + _eu(ay) * (1 - pct_dev)
         bf_ult[ay] = u
         bf_res[ay] = u - lp
 
+    # Results DataFrame
     rows = []
     for ay in accident_years:
         rows.append({
-            "Accident_Year":   ay,
-            "Latest_Paid":     float(latest_paid[ay]),
-            "Diagonal_Lag":    diag_lag[ay],
-            "CDF":             _cdf(diag_lag[ay]),
-            "Pct_Developed":   1.0 / _cdf(diag_lag[ay]),
-            "CL_Ultimate":     cl_ult[ay],
-            "CL_Reserve":      cl_res[ay],
-            "BF_Ultimate":     bf_ult[ay],
-            "BF_Reserve":      bf_res[ay],
+            "Accident_Year": ay,
+            "Latest_Paid": float(latest_paid[ay]),
+            "Diagonal_Lag": diag_lag[ay],
+            "CDF": _cdf(diag_lag[ay]),
+            "Pct_Developed": 1.0 / _cdf(diag_lag[ay]),
+            "CL_Ultimate": cl_ult[ay],
+            "CL_Reserve": cl_res[ay],
+            "BF_Ultimate": bf_ult[ay],
+            "BF_Reserve": bf_res[ay],
             "Blend_50_50_Ult": (cl_ult[ay] + bf_ult[ay]) / 2,
             "Blend_50_50_Res": (cl_res[ay] + bf_res[ay]) / 2,
         })
     results = pd.DataFrame(rows).set_index("Accident_Year")
 
+    # Triangles
     paid_data = {}
     for ay in accident_years:
-        d   = diag_lag[ay]
+        d = diag_lag[ay]
         row = {}
         for lag in lags:
             col_name = f"Lag {lag}"
@@ -225,209 +256,106 @@ if st.button("🚀 RUN RESERVING MODEL", type="primary", use_container_width=Tru
             else:
                 row[col_name] = float("nan")
         paid_data[ay] = row
-
     paid_tri = pd.DataFrame.from_dict(paid_data, orient="index", dtype=float)
     paid_tri.index.name = "Accident_Year"
 
     res_data = {}
     for ay in accident_years:
-        d    = diag_lag[ay]
+        d = diag_lag[ay]
         u_cl = cl_ult[ay]
-        row  = {}
+        row = {}
         for lag in lags:
             col_name = f"Lag {lag}"
             if lag <= d:
-                paid          = paid_data[ay][col_name]
+                paid = paid_data[ay][col_name]
                 row[col_name] = u_cl - (0.0 if np.isnan(paid) else paid)
             else:
                 row[col_name] = float("nan")
         row["CL_Reserve"] = cl_res[ay]
         res_data[ay] = row
-
     res_tri = pd.DataFrame.from_dict(res_data, orient="index", dtype=float)
     res_tri.index.name = "Accident_Year"
 
-    max_lag       = max(lags)
-    fully_dev     = [ay for ay in accident_years if diag_lag[ay] >= max_lag]
+    max_lag = max(lags)
+    fully_dev = [ay for ay in accident_years if diag_lag[ay] >= max_lag]
     most_immature = accident_years[-1]
 
-    st.session_state["model_output"] = dict(
-        results        = results,
-        res_tri        = res_tri,
-        paid_tri       = paid_tri,
-        ldfs           = ldfs,
-        cdfs           = cdfs,
-        eu_display     = eu_display,
-        vy             = vy,
-        fully_dev      = fully_dev,
-        most_immature  = most_immature,
-        accident_years = accident_years,
-        cl_res         = cl_res,
-        bf_res         = bf_res,
-        n_ays          = len(accident_years),
-        max_lag        = max_lag,
-    )
+    st.session_state["model_output"] = {
+        "results": results, "res_tri": res_tri, "paid_tri": paid_tri,
+        "ldfs": ldfs, "cdfs": cdfs, "eu_display": eu_display, "vy": vy,
+        "fully_dev": fully_dev, "most_immature": most_immature,
+        "accident_years": accident_years, "n_ays": len(accident_years),
+        "max_lag": max_lag, "cl_res": cl_res, "bf_res": bf_res
+    }
 
 # ── OUTPUT ────────────────────────────────────────────────────────────────────
 if "model_output" in st.session_state:
-    o              = st.session_state["model_output"]
-    results        = o["results"]
-    res_tri        = o["res_tri"]
-    paid_tri       = o["paid_tri"]
-    ldfs           = o["ldfs"]
-    cdfs           = o["cdfs"]
-    eu_display     = o["eu_display"]
-    vy             = o["vy"]
-    fully_dev      = o["fully_dev"]
-    most_immature  = o["most_immature"]
+    o = st.session_state["model_output"]
+    results = o["results"]
+    res_tri = o["res_tri"]
+    paid_tri = o["paid_tri"]
+    ldfs = o["ldfs"]
+    cdfs = o["cdfs"]
+    eu_display = o["eu_display"]
+    vy = o["vy"]
+    fully_dev = o["fully_dev"]
+    most_immature = o["most_immature"]
     accident_years = o["accident_years"]
-    cl_res         = o["cl_res"]
-    bf_res         = o["bf_res"]
-    n_ays          = o["n_ays"]
-    max_lag        = o["max_lag"]
+    n_ays = o["n_ays"]
+    max_lag = o["max_lag"]
+    cl_res = o["cl_res"]
+    bf_res = o["bf_res"]
 
     st.markdown("---")
 
-    # ── 1. Reserves Triangle ─────────────────────────────────────────────────
     st.subheader("📐 Reserves Triangle (Chain-Ladder)")
-    st.caption(
-        "Each cell = CL Ultimate − Cumulative Paid at that lag. "
-        "CL_Reserve = reserve at the valuation diagonal. "
-        "— = future development (upper triangle)."
-    )
+    st.caption("Each cell = CL Ultimate − Cumulative Paid at that lag. — = future development.")
     tri_height = max(400, 30 + n_ays * 25)
-    st.dataframe(
-        res_tri.style.format("{:,.2f}", na_rep="—"),
-        use_container_width=True,
-        height=tri_height,
-    )
+    st.dataframe(res_tri.style.format("{:,.2f}", na_rep="—"), use_container_width=True, height=tri_height)
 
-    # FIX: removed redundant ℹ️ emoji from text — st.info already shows its own icon
     if fully_dev:
         fd_str = " and ".join(str(ay) for ay in fully_dev)
-        st.info(
-            f"**AY {fd_str}** carry a $0 CL Reserve — these years have reached "
-            f"the maximum observed development lag ({max_lag} years) and are "
-            f"treated as fully developed under the current tail factor (1.0 = no tail loading)."
-        )
+        st.info(f"**AY {fd_str}** carry $0 CL Reserve (fully developed).")
 
     st.markdown("---")
 
-    # ── 2. Paid triangle ─────────────────────────────────────────────────────
     with st.expander("💰 Cumulative Paid Loss Triangle", expanded=False):
-        st.dataframe(
-            paid_tri.style.format("{:,.2f}", na_rep="—"),
-            use_container_width=True,
-        )
+        st.dataframe(paid_tri.style.format("{:,.2f}", na_rep="—"), use_container_width=True)
 
     st.markdown("---")
 
-    # ── 3. Summary metrics ───────────────────────────────────────────────────
     st.subheader("Summary")
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("Chain-Ladder Reserve", f"${results['CL_Reserve'].sum():,.0f}")
-    c2.metric("BF Reserve",           f"${results['BF_Reserve'].sum():,.0f}")
-    c3.metric("50/50 Blend Reserve",  f"${results['Blend_50_50_Res'].sum():,.0f}")
+    c2.metric("BF Reserve", f"${results['BF_Reserve'].sum():,.0f}")
+    c3.metric("50/50 Blend Reserve", f"${results['Blend_50_50_Res'].sum():,.0f}")
     c4.metric("BF Expected Ultimate", f"${eu_display:,.0f}")
 
     st.markdown("---")
 
-    # ── 4. Reserve chart ─────────────────────────────────────────────────────
+    # Plotly Chart
     st.subheader("📊 Reserves by Accident Year")
-
-    ays_str    = [str(ay) for ay in accident_years]
-    cl_vals    = [cl_res[ay] for ay in accident_years]
-    bf_vals    = [bf_res[ay] for ay in accident_years]
+    ays_str = [str(ay) for ay in accident_years]
+    cl_vals = [cl_res[ay] for ay in accident_years]
+    bf_vals = [bf_res[ay] for ay in accident_years]
     blend_vals = [(cl_res[ay] + bf_res[ay]) / 2 for ay in accident_years]
 
-    # FIX: annotation y-position tied to actual data max so it scales with any dataset
-    data_max   = max(max(cl_vals), max(bf_vals))
-    annot_y_fd = data_max * 0.02       # "Fully dev." label sits just above zero
-    annot_y_im = max(cl_res[most_immature], bf_res[most_immature]) + data_max * 0.04
-
     fig = go.Figure()
-    fig.add_trace(go.Bar(
-        name="Chain-Ladder", x=ays_str, y=cl_vals,
-        marker_color="#3B82F6",
-        hovertemplate="AY %{x}<br>CL Reserve: $%{y:,.0f}<extra></extra>",
-    ))
-    fig.add_trace(go.Bar(
-        name="Bornhuetter-Ferguson", x=ays_str, y=bf_vals,
-        marker_color="#F59E0B",
-        hovertemplate="AY %{x}<br>BF Reserve: $%{y:,.0f}<extra></extra>",
-    ))
-    fig.add_trace(go.Bar(
-        name="50/50 Blend", x=ays_str, y=blend_vals,
-        marker_color="#10B981",
-        hovertemplate="AY %{x}<br>Blend Reserve: $%{y:,.0f}<extra></extra>",
-    ))
+    fig.add_trace(go.Bar(name="Chain-Ladder", x=ays_str, y=cl_vals, marker_color="#3B82F6"))
+    fig.add_trace(go.Bar(name="Bornhuetter-Ferguson", x=ays_str, y=bf_vals, marker_color="#F59E0B"))
+    fig.add_trace(go.Bar(name="50/50 Blend", x=ays_str, y=blend_vals, marker_color="#10B981"))
 
-    annotations = []
-    for ay in fully_dev:
-        annotations.append(dict(
-            x=str(ay), y=annot_y_fd, text="Fully dev.",
-            showarrow=False, font=dict(size=9, color="#6B7280"), xanchor="center",
-        ))
-    annotations.append(dict(
-        x=str(most_immature), y=annot_y_im,
-        text="Most immature<br>(lag 0)",
-        showarrow=True, arrowhead=2, arrowcolor="#EF4444",
-        font=dict(size=9, color="#EF4444"), xanchor="center",
-    ))
-
-    fig.update_layout(
-        barmode="group",
-        xaxis_title="Accident Year",
-        yaxis_title="Reserve ($)",
-        yaxis_tickformat="$,.0f",
-        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
-        plot_bgcolor="rgba(0,0,0,0)",
-        paper_bgcolor="rgba(0,0,0,0)",
-        height=430,
-        margin=dict(t=40, b=40),
-        annotations=annotations,
-        hovermode="x unified",
-    )
-    fig.update_xaxes(showgrid=False)
-    fig.update_yaxes(showgrid=True, gridcolor="rgba(128,128,128,0.15)")
+    fig.update_layout(barmode="group", xaxis_title="Accident Year", yaxis_title="Reserve ($)",
+                      height=430, hovermode="x unified")
     st.plotly_chart(fig, use_container_width=True)
 
-    cl_imm  = cl_res[most_immature]
-    bf_imm  = bf_res[most_immature]
-    pct_gap = abs(bf_imm - cl_imm) / cl_imm * 100 if cl_imm > 0 else 0
-    pct_dvd = 1.0 / results.loc[most_immature, "CDF"]
-    st.caption(
-        f"⚠️ **AY {most_immature}** is only {pct_dvd:.1%} developed (lag 0): "
-        f"CL Reserve = ${cl_imm:,.0f} vs BF Reserve = ${bf_imm:,.0f} — a {pct_gap:.0f}% gap. "
-        f"CL is highly sensitive to early paid losses; BF's anchor to the "
-        f"Expected Ultimate (${eu_display:,.0f}) makes it more stable here."
-    )
-
     st.markdown("---")
 
-    # ── 5. Results by Accident Year ──────────────────────────────────────────
     st.subheader("Results by Accident Year")
-
-    money_cols = ["Latest_Paid", "CL_Ultimate", "CL_Reserve",
-                  "BF_Ultimate", "BF_Reserve", "Blend_50_50_Ult", "Blend_50_50_Res"]
-    fmt_map = {**{col: "${:,.2f}" for col in money_cols},
-               "CDF": "{:.6f}",
-               "Pct_Developed": "{:.2%}"}
-    st.dataframe(results.style.format(fmt_map), use_container_width=True)
-
-    # FIX: totals format uses same money_cols dict — won't break if column types shift
-    non_sum = ("Diagonal_Lag", "CDF", "Pct_Developed")
-    totals  = (results[[c for c in results.columns if c not in non_sum]]
-               .sum().to_frame("Total").T)
-    st.markdown("**Totals**")
-    st.dataframe(
-        totals.style.format({col: "${:,.2f}" for col in totals.columns}),
-        use_container_width=True,
-    )
+    st.dataframe(results.style.format("{:,.2f}"), use_container_width=True)
 
     st.markdown("---")
 
-    # ── 6. Development Factors ───────────────────────────────────────────────
     with st.expander("Development Factors", expanded=False):
         col_l, col_r = st.columns(2)
         with col_l:
@@ -436,21 +364,17 @@ if "model_output" in st.session_state:
             st.dataframe(ldf_df.style.format({"LDF": "{:.6f}"}), use_container_width=True)
         with col_r:
             st.markdown("**CDFs to Ultimate**")
-            cdf_df = (pd.DataFrame(list(cdfs.items()), columns=["Lag", "CDF"])
-                      .sort_values("Lag"))
+            cdf_df = pd.DataFrame(list(cdfs.items()), columns=["Lag", "CDF"]).sort_values("Lag")
             st.dataframe(cdf_df.style.format({"CDF": "{:.6f}"}), use_container_width=True)
 
     st.markdown("---")
 
-    # ── 7. Downloads + Reset ─────────────────────────────────────────────────
     col1, col2, col3 = st.columns([2, 2, 1])
     with col1:
-        st.download_button("⬇ Download Results (CSV)", results.to_csv(),
-                           file_name=f"reserves_{vy}.csv", mime="text/csv")
+        st.download_button("⬇ Download Results (CSV)", results.to_csv(), f"reserves_{vy}.csv", mime="text/csv")
     with col2:
-        st.download_button("⬇ Download Reserves Triangle (CSV)", res_tri.to_csv(),
-                           file_name=f"reserves_triangle_{vy}.csv", mime="text/csv")
+        st.download_button("⬇ Download Reserves Triangle (CSV)", res_tri.to_csv(), f"reserves_triangle_{vy}.csv", mime="text/csv")
     with col3:
-        if st.button("🔄 Reset", type="secondary"):
+        if st.button("🔄 Reset All Data", type="secondary"):
             st.session_state.clear()
             st.rerun()
